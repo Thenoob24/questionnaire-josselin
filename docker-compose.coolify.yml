@@ -1,0 +1,38 @@
+# Configuration optimisée pour un déploiement Coolify
+# Coolify gère le reverse proxy (Traefik/Caddy) et les certificats SSL automatiques
+services:
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - QUESTION=${QUESTION:-Que pensez-vous de ce projet ?}
+      - DB_PATH=/data/answers.sqlite
+    volumes:
+      - answers:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3001/api/question || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  web:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  answers:
