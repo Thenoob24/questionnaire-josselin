@@ -9,6 +9,7 @@ services:
       - PORT=3001
       - QUESTION=${QUESTION:-Que pensez-vous de ce projet ?}
       - DB_PATH=/data/answers.sqlite
+      - MODERATOR_PASSWORD=${MODERATOR_PASSWORD:-}
     volumes:
       - answers:/data
     healthcheck:

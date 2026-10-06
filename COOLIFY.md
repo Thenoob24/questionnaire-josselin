@@ -36,11 +36,12 @@ Assurez-vous que votre projet est présent sur votre compte GitHub, GitLab ou Gi
    ```
 3. Coolify configure automatiquement Traefik et génère le certificat SSL Let's Encrypt gratuit.
 
-### 5. Configurer la question (Variables d'environnement)
+### 5. Configurer les variables d'environnement
 1. Allez dans l'onglet **Environment Variables** de votre ressource dans Coolify.
-2. Ajoutez votre question :
+2. Ajoutez votre question et votre mot de passe modérateur :
    ```env
    QUESTION=Votre question personnalisée ici ?
+   MODERATOR_PASSWORD=votre_mot_de_passe_secret
    ```
 3. Sauvegardez.
 

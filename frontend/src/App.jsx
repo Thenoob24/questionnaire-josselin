@@ -26,7 +26,21 @@ export default function App() {
   const [feedback, setFeedback] = useState(null); // { type: 'success' | 'error', message: string }
   const [loading, setLoading] = useState(true);
 
-  // Mémorisation locale des votes de l'utilisateur : { [answerId]: 'like' | 'dislike' }
+  // État de modération
+  const [moderatorToken, setModeratorToken] = useState(() => {
+    try {
+      return sessionStorage.getItem('moderator_token') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [editingAnswer, setEditingAnswer] = useState(null); // { id, author, body } ou null
+
+  // Mémorisation locale des votes : { [answerId]: 'like' | 'dislike' }
   const [userVotes, setUserVotes] = useState(() => {
     try {
       const saved = localStorage.getItem('questionnaire_user_votes');
@@ -65,6 +79,7 @@ export default function App() {
     fetchData();
   }, []);
 
+  // Soumission : création d'une réponse ou enregistrement d'une modification
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFeedback(null);
@@ -99,6 +114,51 @@ export default function App() {
     setIsSubmitting(true);
 
     try {
+      // Cas 1 : Modification en mode modérateur (PATCH)
+      if (editingAnswer) {
+        const res = await fetch(`/api/answers/${editingAnswer.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${moderatorToken}`,
+          },
+          body: JSON.stringify({
+            author: trimmedAuthor || 'Anonyme',
+            body: trimmedBody,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            handleLogoutModeration();
+            setFeedback({
+              type: 'error',
+              message: 'Session de modération expirée. Veuillez vous reconnecter.',
+            });
+            return;
+          }
+          setFeedback({
+            type: 'error',
+            message: data.error || 'Erreur lors de la modification.',
+          });
+          return;
+        }
+
+        // Succès de la modification
+        setEditingAnswer(null);
+        setBody('');
+        setAuthor('');
+        setFeedback({
+          type: 'success',
+          message: 'La réponse a été modifiée avec succès.',
+        });
+        await fetchData();
+        return;
+      }
+
+      // Cas 2 : Création normale par un visiteur (POST)
       const res = await fetch('/api/answers', {
         method: 'POST',
         headers: {
@@ -120,7 +180,7 @@ export default function App() {
         return;
       }
 
-      // Succès : mise à jour immédiate de la liste et du compteur
+      // Succès création
       setAnswers((prev) => [data, ...prev]);
       setAnswersCount((prev) => prev + 1);
       setBody('');
@@ -140,13 +200,138 @@ export default function App() {
     }
   };
 
+  // Connexion modérateur
+  const handleLoginSubmit = async (e) => {
+    e.preventDefault();
+    setLoginError(null);
+    setLoginLoading(true);
+
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: loginPassword }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 503) {
+          setLoginError('La modération n’est pas configurée sur ce serveur (MODERATOR_PASSWORD non défini).');
+        } else {
+          setLoginError('Mot de passe incorrect.');
+        }
+        return;
+      }
+
+      // Succès : enregistrement du jeton dans sessionStorage
+      try {
+        sessionStorage.setItem('moderator_token', data.token);
+      } catch (e) {
+        console.error(e);
+      }
+      setModeratorToken(data.token);
+      setShowLoginModal(false);
+      setLoginPassword('');
+      setFeedback({
+        type: 'success',
+        message: 'Mode modération activé (valable 8 heures).',
+      });
+    } catch (err) {
+      setLoginError('Impossible de joindre le serveur.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // Déconnexion modérateur
+  const handleLogoutModeration = () => {
+    try {
+      sessionStorage.removeItem('moderator_token');
+    } catch (e) {
+      console.error(e);
+    }
+    setModeratorToken(null);
+    handleCancelEdit();
+    setFeedback({
+      type: 'success',
+      message: 'Vous avez quitté le mode modération.',
+    });
+  };
+
+  // Démarrer la modification d'une réponse
+  const handleStartEdit = (item) => {
+    setEditingAnswer(item);
+    setAuthor(item.author === 'Anonyme' ? '' : item.author);
+    setBody(item.body);
+    setFeedback(null);
+    const formSection = document.getElementById('form-card');
+    if (formSection) {
+      formSection.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // Annuler la modification
+  const handleCancelEdit = () => {
+    setEditingAnswer(null);
+    setAuthor('');
+    setBody('');
+  };
+
+  // Supprimer une réponse (avec confirmation)
+  const handleDeleteAnswer = async (id) => {
+    if (!window.confirm('Voulez-vous vraiment supprimer définitivement cette réponse ?')) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/answers/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${moderatorToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          handleLogoutModeration();
+          setFeedback({
+            type: 'error',
+            message: 'Session de modération expirée. Veuillez vous reconnecter.',
+          });
+          return;
+        }
+        const data = await res.json();
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Erreur lors de la suppression.',
+        });
+        return;
+      }
+
+      if (editingAnswer && editingAnswer.id === id) {
+        handleCancelEdit();
+      }
+
+      setFeedback({
+        type: 'success',
+        message: 'Réponse supprimée avec succès.',
+      });
+      await fetchData();
+    } catch (err) {
+      console.error('Erreur suppression :', err);
+      setFeedback({
+        type: 'error',
+        message: 'Erreur réseau lors de la suppression.',
+      });
+    }
+  };
+
   // Gestion des pouces Like et Dislike
   const handleVote = async (answerId, targetVoteType) => {
     const currentVote = userVotes[answerId] || null;
-    // Si on reclique sur le même pouce, on retire le vote
     const newVote = currentVote === targetVoteType ? null : targetVoteType;
 
-    // Calcul du delta pour mise à jour optimiste
     let deltaLikes = 0;
     let deltaDislikes = 0;
 
@@ -156,7 +341,6 @@ export default function App() {
     if (newVote === 'like') deltaLikes += 1;
     if (newVote === 'dislike') deltaDislikes += 1;
 
-    // Mise à jour de l'état local et de localStorage
     const updatedVotes = { ...userVotes };
     if (newVote) {
       updatedVotes[answerId] = newVote;
@@ -170,7 +354,6 @@ export default function App() {
       console.error('Erreur de stockage localStorage :', err);
     }
 
-    // Mise à jour optimiste des compteurs dans l'interface
     setAnswers((prev) =>
       prev.map((ans) => {
         if (ans.id === answerId) {
@@ -184,7 +367,6 @@ export default function App() {
       })
     );
 
-    // Envoi de la requête au serveur
     try {
       const res = await fetch(`/api/answers/${answerId}/vote`, {
         method: 'POST',
@@ -210,6 +392,23 @@ export default function App() {
 
   return (
     <div className="container">
+      {/* Barre d'état modération si connecté */}
+      {moderatorToken && (
+        <aside className="moderator-banner" aria-label="Espace modérateur">
+          <div className="moderator-status">
+            <span className="moderator-icon">🛡️</span>
+            <strong>Mode modération actif</strong>
+          </div>
+          <button
+            type="button"
+            className="btn-logout-mod"
+            onClick={handleLogoutModeration}
+          >
+            Quitter la modération
+          </button>
+        </aside>
+      )}
+
       <header className="header">
         <div className="badge">
           {answersCount === 0
@@ -222,9 +421,18 @@ export default function App() {
       </header>
 
       <main className="main-content">
-        {/* Formulaire de réponse */}
-        <section className="card form-card">
-          <h2 className="section-title">Partager votre réponse</h2>
+        {/* Formulaire de réponse (création ou modification) */}
+        <section className="card form-card" id="form-card">
+          <div className="form-header">
+            <h2 className="section-title">
+              {editingAnswer
+                ? `Modifier la réponse #${editingAnswer.id}`
+                : 'Partager votre réponse'}
+            </h2>
+            {editingAnswer && (
+              <span className="editing-tag">Mode modification</span>
+            )}
+          </div>
 
           {feedback && (
             <div
@@ -279,12 +487,26 @@ export default function App() {
             </div>
 
             <div className="form-actions">
+              {editingAnswer && (
+                <button
+                  type="button"
+                  className="cancel-button"
+                  onClick={handleCancelEdit}
+                  disabled={isSubmitting}
+                >
+                  Annuler
+                </button>
+              )}
               <button
                 type="submit"
                 className="submit-button"
                 disabled={isSubmitting || body.trim().length < 2}
               >
-                {isSubmitting ? 'Envoi en cours...' : 'Envoyer ma réponse'}
+                {isSubmitting
+                  ? 'Enregistrement...'
+                  : editingAnswer
+                  ? 'Enregistrer'
+                  : 'Envoyer ma réponse'}
               </button>
             </div>
           </form>
@@ -308,8 +530,12 @@ export default function App() {
             <div className="answers-list">
               {answers.map((item) => {
                 const currentVote = userVotes[item.id];
+                const isBeingEdited = editingAnswer && editingAnswer.id === item.id;
                 return (
-                  <article key={item.id} className="card answer-card">
+                  <article
+                    key={item.id}
+                    className={`card answer-card ${isBeingEdited ? 'card-editing' : ''}`}
+                  >
                     <header className="answer-header">
                       <div className="avatar">
                         {(item.author || 'A').charAt(0).toUpperCase()}
@@ -322,6 +548,28 @@ export default function App() {
                           {formatDate(item.createdAt)}
                         </time>
                       </div>
+
+                      {/* Actions modérateur dans l'en-tête de la carte */}
+                      {moderatorToken && (
+                        <div className="moderator-card-actions">
+                          <button
+                            type="button"
+                            className="mod-btn mod-edit-btn"
+                            onClick={() => handleStartEdit(item)}
+                            title="Modifier cette réponse"
+                          >
+                            ✏️ Modifier
+                          </button>
+                          <button
+                            type="button"
+                            className="mod-btn mod-delete-btn"
+                            onClick={() => handleDeleteAnswer(item.id)}
+                            title="Supprimer cette réponse"
+                          >
+                            🗑️ Supprimer
+                          </button>
+                        </div>
+                      )}
                     </header>
 
                     <p className="answer-body">{item.body}</p>
@@ -371,8 +619,98 @@ export default function App() {
         </section>
       </main>
 
+      {/* Modal de connexion modérateur */}
+      {showLoginModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            setShowLoginModal(false);
+            setLoginError(null);
+            setLoginPassword('');
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+          >
+            <h3 id="modal-title" className="modal-title">
+              Accès modération
+            </h3>
+            <p className="modal-desc">
+              Entrez le mot de passe de modération pour modifier ou supprimer des réponses.
+            </p>
+
+            {loginError && (
+              <div className="alert alert-error" role="alert">
+                ✕ {loginError}
+              </div>
+            )}
+
+            <form onSubmit={handleLoginSubmit} className="modal-form">
+              <input
+                type="password"
+                className="form-input"
+                placeholder="Mot de passe"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                autoFocus
+                disabled={loginLoading}
+                required
+              />
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="cancel-button"
+                  onClick={() => {
+                    setShowLoginModal(false);
+                    setLoginError(null);
+                    setLoginPassword('');
+                  }}
+                  disabled={loginLoading}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="submit-button"
+                  disabled={loginLoading || !loginPassword}
+                >
+                  {loginLoading ? 'Vérification...' : 'Se connecter'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Footer avec lien discret de modération */}
       <footer className="footer">
         <p>Application de questionnaire collaborative</p>
+        <div className="footer-links">
+          {!moderatorToken ? (
+            <button
+              type="button"
+              className="discreet-mod-link"
+              onClick={() => {
+                setLoginError(null);
+                setShowLoginModal(true);
+              }}
+            >
+              🔒 Modération
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="discreet-mod-link mod-active-link"
+              onClick={handleLogoutModeration}
+            >
+              🔓 Quitter la modération
+            </button>
+          )}
+        </div>
       </footer>
     </div>
   );

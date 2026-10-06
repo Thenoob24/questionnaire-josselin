@@ -68,6 +68,27 @@ function addAnswer(author, body) {
   return stmtGetById.get(info.lastInsertRowid);
 }
 
+function updateAnswer(id, author, body) {
+  const existing = stmtGetById.get(id);
+  if (!existing) return null;
+
+  const newAuthor = author !== undefined ? author : existing.author;
+  const newBody = body !== undefined ? body : existing.body;
+
+  const stmtUpdate = db.prepare('UPDATE answers SET author = ?, body = ? WHERE id = ?');
+  stmtUpdate.run(newAuthor, newBody, id);
+  return stmtGetById.get(id);
+}
+
+function deleteAnswer(id) {
+  const existing = stmtGetById.get(id);
+  if (!existing) return false;
+
+  const stmtDelete = db.prepare('DELETE FROM answers WHERE id = ?');
+  stmtDelete.run(id);
+  return true;
+}
+
 function voteAnswer(id, type, previous) {
   let deltaLikes = 0;
   let deltaDislikes = 0;
@@ -96,5 +117,7 @@ module.exports = {
   getAnswersCount,
   getAnswers,
   addAnswer,
+  updateAnswer,
+  deleteAnswer,
   voteAnswer,
 };
